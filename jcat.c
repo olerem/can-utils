@@ -26,25 +26,14 @@
 
 char *uinput_dev_str = "/dev/uinput";
 struct uinput_user_dev uidev;
-/*
- * min()/max()/clamp() macros that also do
- * strict type-checking.. See the
- * "unnecessary" pointer comparison.
- */
-#define min(x, y) ({				\
-	typeof(x) _min1 = (x);			\
-	typeof(y) _min2 = (y);			\
-	(void) (&_min1 == &_min2);		\
-	_min1 < _min2 ? _min1 : _min2; })
 
-
-struct jcat_stats {
+struct jbutton_stats {
 	int err;
 	uint32_t tskey;
 	uint32_t send;
 };
 
-struct jcat_priv {
+struct jbutton_priv {
 	int sock;
 	int infile;
 	int uinput_fd;
@@ -83,7 +72,7 @@ static void crash(char *str)
 	exit(-1);
 }
 
-static void jcat_init_sockaddr_can(struct sockaddr_can *sac)
+static void jbutton_init_sockaddr_can(struct sockaddr_can *sac)
 {
 	sac->can_family = AF_CAN;
 	sac->can_addr.j1939.addr = J1939_NO_ADDR;
@@ -92,7 +81,7 @@ static void jcat_init_sockaddr_can(struct sockaddr_can *sac)
 }
 
 
-static int jcat_set_event(struct jcat_priv *priv, int  event)
+static int jbutton_set_event(struct jbutton_priv *priv, int  event)
 {
 	struct input_event     ev[2];
 
@@ -105,7 +94,7 @@ static int jcat_set_event(struct jcat_priv *priv, int  event)
 	return 0;
 }
 
-static int jcat_process_event(struct jcat_priv *priv, uint8_t *buf,
+static int jbutton_process_event(struct jbutton_priv *priv, uint8_t *buf,
 			      size_t size)
 {
 	int i;
@@ -118,10 +107,10 @@ static int jcat_process_event(struct jcat_priv *priv, uint8_t *buf,
 
 	fprintf(stdout, "\n");
 
-	return jcat_set_event(priv, BTN_LEFT);
+	return jbutton_set_event(priv, BTN_LEFT);
 }
 
-static int jcat_recv_one(struct jcat_priv *priv)
+static int jbutton_recv_one(struct jbutton_priv *priv)
 {
 	int ret, i;
 	uint8_t buf[8];
@@ -141,12 +130,12 @@ static int jcat_recv_one(struct jcat_priv *priv)
 	}
 
 	if (new)
-		return jcat_process_event(priv, buf, sizeof(buf));
+		return jbutton_process_event(priv, buf, sizeof(buf));
 
 	return EXIT_SUCCESS;
 }
 
-static int jcat_recv_loop(struct jcat_priv *priv)
+static int jbutton_recv_loop(struct jbutton_priv *priv)
 {
 	unsigned int events = POLLIN;
 	bool abort = false;
@@ -174,12 +163,12 @@ static int jcat_recv_loop(struct jcat_priv *priv)
 			}
 
 			if (fds.revents & POLLIN) {
-				ret = jcat_recv_one(priv);
+				ret = jbutton_recv_one(priv);
 				if (ret < 0)
 					return ret;
 			}
 		} else {
-			ret = jcat_recv_one(priv);
+			ret = jbutton_recv_one(priv);
 			if (ret < 0)
 				return ret;
 		}
@@ -187,7 +176,7 @@ static int jcat_recv_loop(struct jcat_priv *priv)
 	return 0;
 }
 
-static int jcat_sock_prepare(struct jcat_priv *priv)
+static int jbutton_sock_prepare(struct jbutton_priv *priv)
 {
 	int value;
 	int ret;
@@ -235,7 +224,7 @@ static int jcat_sock_prepare(struct jcat_priv *priv)
 	return EXIT_SUCCESS;
 }
 
-static int jcat_parse_args(struct jcat_priv *priv, int argc, char *argv[])
+static int jbutton_parse_args(struct jbutton_priv *priv, int argc, char *argv[])
 {
 	int opt;
 
@@ -272,7 +261,7 @@ static int jcat_parse_args(struct jcat_priv *priv, int argc, char *argv[])
 	return EXIT_SUCCESS;
 }
 
-static int init_uinput(struct jcat_priv *priv) {
+static int init_uinput(struct jbutton_priv *priv) {
 	int fd;
 
 	if ((fd = open(uinput_dev_str, O_WRONLY | O_NONBLOCK)) < 0)
@@ -299,7 +288,7 @@ static int init_uinput(struct jcat_priv *priv) {
 
 int main(int argc, char *argv[])
 {
-	struct jcat_priv *priv;
+	struct jbutton_priv *priv;
 	int ret;
 
 	priv = malloc(sizeof(*priv));
@@ -316,18 +305,18 @@ int main(int argc, char *argv[])
 	priv->repeat = 1;
 	priv->uinput_fd = init_uinput(priv);
 
-	jcat_init_sockaddr_can(&priv->sockname);
-	jcat_init_sockaddr_can(&priv->peername);
+	jbutton_init_sockaddr_can(&priv->sockname);
+	jbutton_init_sockaddr_can(&priv->peername);
 
-	ret = jcat_parse_args(priv, argc, argv);
+	ret = jbutton_parse_args(priv, argc, argv);
 	if (ret)
 		return ret;
 
-	ret = jcat_sock_prepare(priv);
+	ret = jbutton_sock_prepare(priv);
 	if (ret)
 		return ret;
 
-	ret = jcat_recv_loop(priv);
+	ret = jbutton_recv_loop(priv);
 
 	ioctl(priv->uinput_fd, UI_DEV_DESTROY);
 
