@@ -54,17 +54,12 @@ struct jcat_priv {
 	int todo_prio;
 
 	bool valid_peername;
-	bool todo_recv;
-	bool todo_filesize;
 
 	unsigned long polltimeout;
 
 	struct sockaddr_can sockname;
 	struct sockaddr_can peername;
 
-	struct sock_extended_err *serr;
-	struct scm_timestamping *tss;
-	struct jcat_stats stats;
 	uint8_t old_buf[8];
 };
 
@@ -88,18 +83,6 @@ static void crash(char *str)
 	exit(-1);
 }
 
-static int now()
-{
-	struct timeval tv;
-	static int t0;
-
-	if (gettimeofday(&tv, NULL) < 0)
-		crash("gettimeofday()");
-	if (t0 == 0)
-		t0 = tv.tv_sec; /* first call */
-	return((tv.tv_sec - t0)*1000 + tv.tv_usec/1000); /* Not foolproof... fails after 11 days up */
-}
-
 static void jcat_init_sockaddr_can(struct sockaddr_can *sac)
 {
 	sac->can_family = AF_CAN;
@@ -108,77 +91,35 @@ static void jcat_init_sockaddr_can(struct sockaddr_can *sac)
 	sac->can_addr.j1939.pgn = J1939_NO_PGN;
 }
 
-#define abs(a) ((a)>0?(a):-(a))
-int main(int argc, char *argv[])
-	{
-	int	uinput_fd;
-	int	hidraw_fd;
+
+static int jcat_set_event(struct jcat_priv *priv, int  event)
+{
 	struct input_event     ev[2];
-	int	b, x, y;
-	int	touch_state, landing_x0, landing_y0, landing_t0, has_moved;
 
-	hidraw_fd = init_hidraw();
-	uinput_fd = init_uinput();
+	ev[0].type = EV_KEY;
+	ev[0].code = event;
+	ev[0].value = 1;
 
-	touch_state = 0; /* penUp */
-	while (get_raw_event(hidraw_fd, &b, &x, &y))
-		{
-printf("%d %4d %4d\n", b, x, y);  /* debug */
-		if (b == 1)
-			{
-			memset(&ev, 0, sizeof(struct input_event));
-			ev[0].type = ev[1].type = EV_ABS;
-			ev[0].code = ABS_X; ev[1].code = ABS_Y;
-			ev[0].value = x; ev[1].value = y;
-			if(write(uinput_fd,  &ev, sizeof(ev)) < 0)
-				crash("event write");
-			if (touch_state == 0)
-				{ /* landing */
-				touch_state = 1; has_moved = 0;
-				landing_x0 = x; landing_y0 = y;
-				landing_t0 = now();
-				}
-			else	{
-				if (abs((x - landing_x0)) > NOT_MUCH || abs((y - landing_y0)) > NOT_MUCH)
-					has_moved = 1;
-				}
-			}
-		else	{
-			if (touch_state == 1 && has_moved == 0)
-				{ /* 'click' take-off */
-				if ((now() - landing_t0) < SHORT_CLICK)
-					{ /* short click == left mouse click */
-					ev[0].type = EV_KEY;
-					ev[0].code = BTN_LEFT;
-					ev[0].value = 1;
-					if(write(uinput_fd,  &ev[0], sizeof(ev[0])) < 0)
-						crash("event write: Left-click");
-					ev[0].value = 0;
-					if(write(uinput_fd,  &ev[0], sizeof(ev[0])) < 0)
-						crash("event write: Left-click");
-					printf("left-click\n");
-					}
-				else	{ /* long click == right mouse click */
-					ev[0].type = EV_KEY;
-					ev[0].code = BTN_RIGHT;
-					ev[0].value = 1;
-					if(write(uinput_fd,  &ev[0], sizeof(ev[0])) < 0)
-						crash("event write");
-					ev[0].value = 0;
-					if(write(uinput_fd,  &ev[0], sizeof(ev[0])) < 0)
-						crash("event write: Right-click");
-					printf("right-click: Right-click\n");
-					}
-				}
-			touch_state = 0;
-			}
-	        }
-
-	if(ioctl(uinput_fd,  UI_DEV_DESTROY) < 0)
-		crash("error: ioctl");
-	close(uinput_fd);
+	if (write(priv->uinput_fd,  &ev[0], sizeof(ev[0])) < 0)
+		crash("event write: Left-click");
 	return 0;
+}
+
+static int jcat_process_event(struct jcat_priv *priv, uint8_t *buf,
+			      size_t size)
+{
+	int i;
+
+	for (i = 0; i < size; i++) {
+		fprintf(stdout, "0x%02x ", buf[i]);
+		priv->old_buf[i] = buf[i];
+		/* TODO: send some uevent here */
 	}
+
+	fprintf(stdout, "\n");
+
+	return jcat_set_event(priv, BTN_LEFT, 1);
+}
 
 static int jcat_recv_one(struct jcat_priv *priv)
 {
@@ -199,15 +140,8 @@ static int jcat_recv_one(struct jcat_priv *priv)
 		}
 	}
 
-	if (new) {
-		for (i = 0; i < sizeof(buf); i++) {
-			fprintf(stdout, "0x%02x ", buf[i]);
-			priv->old_buf[i] = buf[i];
-			/* TODO: send some uevent here */
-		}
-
-		fprintf(stdout, "\n");
-	}
+	if (new)
+		return jcat_process_event(priv, buf, sizeof(buf));
 
 	return EXIT_SUCCESS;
 }
@@ -338,8 +272,6 @@ static int jcat_parse_args(struct jcat_priv *priv, int argc, char *argv[])
 	return EXIT_SUCCESS;
 }
 
-
-
 static int init_uinput(struct jcat_priv *priv) {
 	int fd;
 
@@ -348,18 +280,14 @@ static int init_uinput(struct jcat_priv *priv) {
 
 	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0
 		|| ioctl(fd, UI_SET_KEYBIT, BTN_LEFT) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT) < 0
-		|| ioctl(fd, UI_SET_EVBIT, EV_ABS) < 0
-		|| ioctl(fd, UI_SET_ABSBIT, ABS_X) < 0
-		|| ioctl(fd, UI_SET_ABSBIT, ABS_Y) < 0)
+		|| ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT) < 0)
 		crash("ioctl(UI_SET_*)");
 
-	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "hidraw2uinput");
+	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "jbutton2uinput");
 	uidev.id.bustype = BUS_USB;
-	uidev.id.vendor  = 0x1; uidev.id.product = 0x1; /* should be something else */
+	uidev.id.vendor  = 0x1;
+	uidev.id.product = 0x1; /* should be something else */
 	uidev.id.version = 1;
-	uidev.absmin[ABS_X] = MIN_X; uidev.absmax[ABS_X] = MAX_X;
-	uidev.absmin[ABS_Y] = MIN_Y; uidev.absmax[ABS_Y] = MAX_Y;
 
 	if (write(fd, &uidev, sizeof(uidev)) < 0)
 		crash("write(&uidev)");
@@ -386,7 +314,7 @@ int main(int argc, char *argv[])
 	priv->max_transfer = J1939_MAX_ETP_PACKET_SIZE;
 	priv->polltimeout = 100000;
 	priv->repeat = 1;
-	uinput_fd = init_uinput();
+	priv->uinput_fd = init_uinput(priv);
 
 	jcat_init_sockaddr_can(&priv->sockname);
 	jcat_init_sockaddr_can(&priv->peername);
@@ -400,6 +328,8 @@ int main(int argc, char *argv[])
 		return ret;
 
 	ret = jcat_recv_loop(priv);
+
+	ioctl(priv->uinput_fd, UI_DEV_DESTROY);
 
 	close(priv->infile);
 	close(priv->outfile);
