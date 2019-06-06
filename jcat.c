@@ -118,7 +118,7 @@ static int jcat_process_event(struct jcat_priv *priv, uint8_t *buf,
 
 	fprintf(stdout, "\n");
 
-	return jcat_set_event(priv, BTN_LEFT, 1);
+	return jcat_set_event(priv, BTN_LEFT);
 }
 
 static int jcat_recv_one(struct jcat_priv *priv)
