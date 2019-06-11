@@ -23,14 +23,18 @@
 #include "libj1939.h"
 #define J1939_MAX_ETP_PACKET_SIZE (7 * 0x00ffffff)
 #define JCAT_BUF_SIZE (1000 * 1024)
+#define ARRAY_SIZE(array) \
+	    (sizeof(array) / sizeof(*array))
+
 
 char *uinput_dev_str = "/dev/uinput";
 struct uinput_user_dev uidev;
 
-struct jbutton_stats {
-	int err;
-	uint32_t tskey;
-	uint32_t send;
+struct jbutton_key {
+	uint8_t byte;
+	uint8_t mask;
+	uint8_t shift;
+	int code;
 };
 
 struct jbutton_priv {
@@ -50,6 +54,24 @@ struct jbutton_priv {
 	struct sockaddr_can peername;
 
 	uint8_t old_buf[8];
+};
+
+/*
+ *  1  2  3
+ *   (4/5)
+ *    6 7
+ * Keys - 1, 2, 3, 6, 7
+ * Wheel - 4 + key 5
+ */
+
+static const struct jbutton_key jbutton_keys[] = {
+	{ 1, 0xff, 0, REL_HWHEEL }, /* 4 - wheel */
+	{ 3, 0x01, 0, KEY_F1 }, /* 1 - key */
+	{ 3, 0x04, 2, KEY_F2 }, /* 2 - key */
+	{ 3, 0x10, 4, KEY_F3 }, /* 3 - key */
+	{ 3, 0x40, 6, KEY_F4 }, /* 6 - key */
+	{ 4, 0x01, 0, KEY_F5 }, /* 7 - key */
+	{ 4, 0x01, 0, BTN_WHEEL }, /* 5 - wheel key */
 };
 
 static const char help_msg[] =
@@ -80,17 +102,37 @@ static void jbutton_init_sockaddr_can(struct sockaddr_can *sac)
 	sac->can_addr.j1939.pgn = J1939_NO_PGN;
 }
 
-
-static int jbutton_set_event(struct jbutton_priv *priv, int  event)
+static void emit(int fd, int type, int code, int val)
 {
-	struct input_event     ev[2];
+	struct input_event ie;
 
-	ev[0].type = EV_KEY;
-	ev[0].code = event;
-	ev[0].value = 1;
+	ie.type = type;
+	ie.code = code;
+	ie.value = val;
+	/* timestamp values below are ignored */
+	ie.time.tv_sec = 0;
+	ie.time.tv_usec = 0;
 
-	if (write(priv->uinput_fd,  &ev[0], sizeof(ev[0])) < 0)
+	if (write(fd,  &ie, sizeof(ie)) < 0)
 		crash("event write: Left-click");
+}
+
+static int jbutton_set_event(struct jbutton_priv *priv,
+			     const struct jbutton_key *key,
+			     uint8_t *buf)
+{
+	uint8_t val = (buf[key->byte] & key->mask) >> key->shift;
+
+	fprintf(stdout, "%i 0x%02x ", key->byte, val);
+
+	if ((priv->old_buf[key->byte] & key->mask) >> key->shift == val)
+		return 0;
+
+	fprintf(stdout, "! ");
+
+	emit(priv->uinput_fd, EV_KEY, key->code, val);
+	emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
+
 	return 0;
 }
 
@@ -98,6 +140,10 @@ static int jbutton_process_event(struct jbutton_priv *priv, uint8_t *buf,
 			      size_t size)
 {
 	int i;
+
+	for (i = 0; i < ARRAY_SIZE(jbutton_keys); i++)
+		jbutton_set_event(priv, &jbutton_keys[i], buf);
+
 
 	for (i = 0; i < size; i++) {
 		fprintf(stdout, "0x%02x ", buf[i]);
@@ -107,7 +153,7 @@ static int jbutton_process_event(struct jbutton_priv *priv, uint8_t *buf,
 
 	fprintf(stdout, "\n");
 
-	return jbutton_set_event(priv, BTN_LEFT);
+	return 0;
 }
 
 static int jbutton_recv_one(struct jbutton_priv *priv)
@@ -268,8 +314,13 @@ static int init_uinput(struct jbutton_priv *priv) {
 		crash(uinput_dev_str);
 
 	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, BTN_LEFT) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, BTN_RIGHT) < 0)
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_F1) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_F2) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_F3) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_F4) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_F5) < 0
+		|| ioctl(fd, UI_SET_EVBIT, EV_REL) < 0
+		|| ioctl(fd, UI_SET_RELBIT, REL_HWHEEL) < 0)
 		crash("ioctl(UI_SET_*)");
 
 	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "jbutton2uinput");
