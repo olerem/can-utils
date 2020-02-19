@@ -65,12 +65,12 @@ struct jbutton_priv {
  */
 
 static const struct jbutton_key jbutton_keys[] = {
-	{ 1, 0xff, 0, REL_HWHEEL }, /* 4 - wheel */
-	{ 3, 0x01, 0, KEY_F1 }, /* 1 - key */
-	{ 3, 0x04, 2, KEY_F2 }, /* 2 - key */
-	{ 3, 0x10, 4, KEY_F3 }, /* 3 - key */
-	{ 3, 0x40, 6, KEY_F4 }, /* 6 - key */
-	{ 4, 0x01, 0, KEY_F5 }, /* 7 - key */
+	{ 1, 0xff, 0, KEY_J }, /* 4 - wheel */
+	{ 3, 0x01, 0, KEY_P }, /* 1 - key */
+	{ 3, 0x04, 2, KEY_A }, /* 2 - key */
+	{ 3, 0x10, 4, KEY_A }, /* 3 - key */
+	{ 3, 0x40, 6, KEY_S }, /* 6 - key */
+	{ 4, 0x01, 0, KEY_A }, /* 7 - key */
 	{ 4, 0x01, 0, BTN_WHEEL }, /* 5 - wheel key */
 };
 
@@ -122,16 +122,30 @@ static int jbutton_set_event(struct jbutton_priv *priv,
 			     uint8_t *buf)
 {
 	uint8_t val = (buf[key->byte] & key->mask) >> key->shift;
+	uint8_t oldval = (priv->old_buf[key->byte] & key->mask) >> key->shift;
+	int code;
 
 	fprintf(stdout, "%i 0x%02x ", key->byte, val);
 
-	if ((priv->old_buf[key->byte] & key->mask) >> key->shift == val)
+	if (oldval == val)
 		return 0;
 
 	fprintf(stdout, "! ");
 
-	emit(priv->uinput_fd, EV_KEY, key->code, val);
+	code = key->code;
+	if (key->code == KEY_J) {
+		val = 1;
+		if (oldval < val)
+			code = KEY_L;
+	}
+
+	emit(priv->uinput_fd, EV_KEY, code, val);
 	emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
+
+	if (key->code == KEY_J) {
+		emit(priv->uinput_fd, EV_KEY, code, 0);
+		emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
+	}
 
 	return 0;
 }
@@ -314,13 +328,13 @@ static int init_uinput(struct jbutton_priv *priv) {
 		crash(uinput_dev_str);
 
 	if (ioctl(fd, UI_SET_EVBIT, EV_KEY) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, KEY_F1) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, KEY_F2) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, KEY_F3) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, KEY_F4) < 0
-		|| ioctl(fd, UI_SET_KEYBIT, KEY_F5) < 0
-		|| ioctl(fd, UI_SET_EVBIT, EV_REL) < 0
-		|| ioctl(fd, UI_SET_RELBIT, REL_HWHEEL) < 0)
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_P) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_J) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_L) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_S) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_D) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_A) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_K) < 0)
 		crash("ioctl(UI_SET_*)");
 
 	snprintf(uidev.name, UINPUT_MAX_NAME_SIZE, "jbutton2uinput");
