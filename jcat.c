@@ -66,12 +66,12 @@ struct jbutton_priv {
 
 static const struct jbutton_key jbutton_keys[] = {
 	{ 1, 0xff, 0, KEY_J }, /* 4 - wheel */
-	{ 3, 0x01, 0, KEY_P }, /* 1 - key */
-	{ 3, 0x04, 2, KEY_A }, /* 2 - key */
-	{ 3, 0x10, 4, KEY_A }, /* 3 - key */
-	{ 3, 0x40, 6, KEY_S }, /* 6 - key */
-	{ 4, 0x01, 0, KEY_A }, /* 7 - key */
-	{ 4, 0x01, 0, BTN_WHEEL }, /* 5 - wheel key */
+	{ 3, 0x01, 0, KEY_K }, /* 1 - key */
+	{ 3, 0x04, 2, KEY_K }, /* 2 - key */
+	{ 3, 0x10, 4, KEY_K }, /* 3 - key */
+	{ 3, 0x40, 6, KEY_K }, /* 6 - key */
+	{ 4, 0x01, 0, KEY_K }, /* 7 - key */
+	{ 4, 0x04, 0, KEY_SPACE }, /* 5 - wheel key */
 };
 
 static const char help_msg[] =
@@ -117,37 +117,56 @@ static void emit(int fd, int type, int code, int val)
 		crash("event write: Left-click");
 }
 
+static int jbutton_set_rot_event(struct jbutton_priv *priv,
+			     const struct jbutton_key *key,
+			     uint8_t *buf)
+{
+	uint8_t val = (buf[key->byte] & key->mask) >> key->shift;
+	uint8_t oldval = (priv->old_buf[key->byte] & key->mask) >> key->shift;
+	int8_t diffval = val - oldval;	// uint8_t -> int8_t magic!
+	int code, i;
+
+	code = key->code;
+	if (diffval > 0)
+		code = KEY_L;
+
+	for (i = 0; i < abs(diffval); i++) {
+		emit(priv->uinput_fd, EV_KEY, code, 1);
+		emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
+		emit(priv->uinput_fd, EV_KEY, code, 0);
+		emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
+	}
+
+	return 0;
+}
+
 static int jbutton_set_event(struct jbutton_priv *priv,
 			     const struct jbutton_key *key,
 			     uint8_t *buf)
 {
 	uint8_t val = (buf[key->byte] & key->mask) >> key->shift;
 	uint8_t oldval = (priv->old_buf[key->byte] & key->mask) >> key->shift;
-	int code;
-
-	fprintf(stdout, "%i 0x%02x ", key->byte, val);
+	int ret = 0;
 
 	if (oldval == val)
 		return 0;
 
-	fprintf(stdout, "! ");
-
-	code = key->code;
 	if (key->code == KEY_J) {
-		val = 1;
-		if (oldval < val)
-			code = KEY_L;
+		ret = jbutton_set_rot_event(priv, key, buf);
+		goto out;
 	}
 
-	emit(priv->uinput_fd, EV_KEY, code, val);
+	if (!val)
+		goto out;
+
+	emit(priv->uinput_fd, EV_KEY, key->code, 1);
+	emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
+	emit(priv->uinput_fd, EV_KEY, key->code, 0);
 	emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
 
-	if (key->code == KEY_J) {
-		emit(priv->uinput_fd, EV_KEY, code, 0);
-		emit(priv->uinput_fd, EV_SYN, SYN_REPORT, 0);
-	}
-
-	return 0;
+out:
+	fprintf(stdout, "%i 0x%02x !\n", key->byte, val);
+	return ret;
 }
 
 static int jbutton_process_event(struct jbutton_priv *priv, uint8_t *buf,
@@ -158,14 +177,11 @@ static int jbutton_process_event(struct jbutton_priv *priv, uint8_t *buf,
 	for (i = 0; i < ARRAY_SIZE(jbutton_keys); i++)
 		jbutton_set_event(priv, &jbutton_keys[i], buf);
 
-
 	for (i = 0; i < size; i++) {
-		fprintf(stdout, "0x%02x ", buf[i]);
+		//fprintf(stdout, "0x%02x ", buf[i]);
 		priv->old_buf[i] = buf[i];
 		/* TODO: send some uevent here */
 	}
-
-	fprintf(stdout, "\n");
 
 	return 0;
 }
@@ -334,6 +350,7 @@ static int init_uinput(struct jbutton_priv *priv) {
 		|| ioctl(fd, UI_SET_KEYBIT, KEY_S) < 0
 		|| ioctl(fd, UI_SET_KEYBIT, KEY_D) < 0
 		|| ioctl(fd, UI_SET_KEYBIT, KEY_A) < 0
+		|| ioctl(fd, UI_SET_KEYBIT, KEY_SPACE) < 0
 		|| ioctl(fd, UI_SET_KEYBIT, KEY_K) < 0)
 		crash("ioctl(UI_SET_*)");
 
