@@ -13,6 +13,8 @@ LDADD = \
 
 noinst_HEADERS = \
 	canframelen.h \
+	isobusfs/isobusfs_cmn.h \
+	isobusfs/isobusfs_srv.h \
 	lib.h \
 	libj1939.h \
 	terminal.h \
@@ -73,6 +75,12 @@ EXTRA_DIST += \
 	mcp251xfd/devcoredump \
 	mcp251xfd/mcp251xfd-gen-testdata.sh
 
+lib_LTLIBRARIES = \
+	libisobusfs.la
+
+libisobusfs_la_SOURCES = \
+	isobusfs/isobusfs_cmn.c
+
 bin_PROGRAMS = \
 	asc2log \
 	bcmserver \
@@ -87,6 +95,8 @@ bin_PROGRAMS = \
 	cansend \
 	cansequence \
 	cansniffer \
+	isobusfs-cli \
+	isobusfs-srv \
 	isotpdump \
 	isotpperf \
 	isotprecv \
@@ -105,6 +115,22 @@ bin_PROGRAMS = \
 	slcand \
 	slcanpty \
 	testj1939
+
+isobusfs_cli_SOURCES = \
+	isobusfs/isobusfs_cli.c
+
+isobusfs_cli_LDADD = \
+	libisobusfs.la \
+	libj1939.la
+
+isobusfs_srv_SOURCES = \
+	isobusfs/isobusfs_srv.c \
+	isobusfs/isobusfs_srv_cm_fss.c \
+	isobusfs/isobusfs_srv_cm.c
+
+isobusfs_srv_LDADD = \
+	libisobusfs.la \
+	libj1939.la
 
 j1939acd_LDADD = libj1939.la
 j1939cat_LDADD = libj1939.la
