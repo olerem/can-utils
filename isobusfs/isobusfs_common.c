@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2020 Pengutronix, Oleksij Rempel <o.rempel@pengutronix.de>
+
 
 
 static const char *isobusfs_error_to_str(enum j1939_xtp_abort error)
@@ -38,6 +41,14 @@ static const char *isobusfs_error_to_str(enum j1939_xtp_abort error)
 	default:
 		return "<unknown>";
 	}
+}
+
+void isobusfs_init_sockaddr_can(struct sockaddr_can *sac, u32 pgn)
+{
+	sac->can_family = AF_CAN;
+	sac->can_addr.j1939.addr = J1939_NO_ADDR;
+	sac->can_addr.j1939.name = J1939_NO_NAME;
+	sac->can_addr.j1939.pgn = pgn;
 }
 
 
