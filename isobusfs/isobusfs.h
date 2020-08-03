@@ -1,4 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2020 Pengutronix, Oleksij Rempel <o.rempel@pengutronix.de>
 
+#ifndef _ISOBUSFS_H_
+#define _ISOBUSFS_H_
+
+#define ISOBUS_PGN_FS_TO_CLIENT			0x0ab00 /* 43766 */
+#define ISOBUS_PGN_CLIENT_TO_FS			0x0aa00 /* 43520 */
+
+#define ISOBUSFS_DEFAULT_PRIO			7
 
 /* Command groups (CG) */
 #define ISOBUSFS_CG_CONNECTION_MANAGMENT	0
@@ -6,8 +15,6 @@
 #define ISOBUSFS_CG_FILE_ACCESS			2
 #define ISOBUSFS_CG_FILE_HANDLING		3
 #define ISOBUSFS_CG_VOLUME_HANDLING		4
-
-
 
 /* Connection Management functions: */
 /* send by server: */
@@ -69,7 +76,6 @@
  * These commands should be limited to initial setup, intended to be used by
  * service tool clients only.
  */
-
 /* send by server: */
 /* Initialize Volume: Prepare the volume to accept files and directories. All
  * data will be lost upon completion of this command.
@@ -78,8 +84,6 @@
 
 /* send by client: */
 #define ISOBUSFS_VA_F_INITIALIZE_VOLUME_REQ	0
-
-
 
 enum isobusfs_error {
 	/* Success */
@@ -119,3 +123,8 @@ enum isobusfs_error {
 	 */
 	ISOBUSFS_ERR_ = 45,
 };
+
+
+void isobusfs_init_sockaddr_can(struct sockaddr_can *sac, u32 pgn);
+
+#endif /* !_ISOBUSFS_H_ */
