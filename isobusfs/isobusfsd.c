@@ -1,7 +1,5 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
-/*
- * Copyright (c) 2018 Pengutronix, Oleksij Rempel <o.rempel@pengutronix.de>
- */
+// SPDX-License-Identifier: GPL-2.0-only
+// SPDX-FileCopyrightText: 2020 Pengutronix, Oleksij Rempel <o.rempel@pengutronix.de>
 
 #include <err.h>
 #include <errno.h>
@@ -36,25 +34,24 @@
 	_min1 < _min2 ? _min1 : _min2; })
 
 
-struct j1939cat_stats {
+struct isobusfsd_stats {
 	int err;
 	uint32_t tskey;
 	uint32_t send;
 };
 
-struct j1939cat_priv {
+struct isobusfsd_priv {
 	int sock;
 	int infile;
 	int outfile;
 	size_t max_transfer;
 	unsigned long repeat;
 	unsigned long round;
-	int todo_prio;
+	int prio;
 
 	bool valid_peername;
 	bool todo_recv;
 	bool todo_filesize;
-	bool todo_connect;
 
 	unsigned long polltimeout;
 
@@ -63,12 +60,12 @@ struct j1939cat_priv {
 
 	struct sock_extended_err *serr;
 	struct scm_timestamping *tss;
-	struct j1939cat_stats stats;
+	struct isobusfsd_stats stats;
 };
 
 static const char help_msg[] =
-	"j1939cat: netcat-like tool for j1939\n"
-	"Usage: j1939cat [options] FROM TO\n"
+	"isobusfsd: netcat-like tool for j1939\n"
+	"Usage: isobusfsd [options] FROM TO\n"
 	" FROM / TO	- or [IFACE][:[SA][,[PGN][,NAME]]]\n"
 	"Options:\n"
 	" -i <infile>	(default stdin)\n"
@@ -79,23 +76,14 @@ static const char help_msg[] =
 	" -R <count>	Set send repeat count. Default: 1\n"
 	"\n"
 	"Example:\n"
-	"j1939cat -i some_file_to_send  can0:0x80 :0x90,0x12300\n"
-	"j1939cat can0:0x90 -r > /tmp/some_file_to_receive\n"
+	"isobusfsd -i some_file_to_send  can0:0x80 :0x90,0x12300\n"
+	"isobusfsd can0:0x90 -r > /tmp/some_file_to_receive\n"
 	"\n"
 	;
 
 static const char optstring[] = "?hi:vs:rp:P:R:";
 
-
-static void j1939cat_init_sockaddr_can(struct sockaddr_can *sac)
-{
-	sac->can_family = AF_CAN;
-	sac->can_addr.j1939.addr = J1939_NO_ADDR;
-	sac->can_addr.j1939.name = J1939_NO_NAME;
-	sac->can_addr.j1939.pgn = J1939_NO_PGN;
-}
-
-static ssize_t j1939cat_send_one(struct j1939cat_priv *priv, int out_fd,
+static ssize_t isobusfsd_send_one(struct isobusfsd_priv *priv, int out_fd,
 			     const void *buf, size_t buf_size)
 {
 	ssize_t num_sent;
@@ -129,10 +117,10 @@ static ssize_t j1939cat_send_one(struct j1939cat_priv *priv, int out_fd,
 	return num_sent;
 }
 
-static void j1939cat_print_timestamp(struct j1939cat_priv *priv, const char *name,
+static void isobusfsd_print_timestamp(struct isobusfsd_priv *priv, const char *name,
 			      struct timespec *cur)
 {
-	struct j1939cat_stats *stats = &priv->stats;
+	struct isobusfsd_stats *stats = &priv->stats;
 
 	if (!(cur->tv_sec | cur->tv_nsec))
 		return;
@@ -144,7 +132,7 @@ static void j1939cat_print_timestamp(struct j1939cat_priv *priv, const char *nam
 	fprintf(stderr, "\n");
 }
 
-static const char *j1939cat_tstype_to_str(int tstype)
+static const char *isobusfsd_tstype_to_str(int tstype)
 {
 	switch (tstype) {
 	case SCM_TSTAMP_SCHED:
@@ -159,9 +147,9 @@ static const char *j1939cat_tstype_to_str(int tstype)
 }
 
 /* Check the stats of SCM_TIMESTAMPING_OPT_STATS */
-static void j1939cat_scm_opt_stats(struct j1939cat_priv *priv, void *buf, int len)
+static void isobusfsd_scm_opt_stats(struct isobusfsd_priv *priv, void *buf, int len)
 {
-	struct j1939cat_stats *stats = &priv->stats;
+	struct isobusfsd_stats *stats = &priv->stats;
 	int offset = 0;
 
 	while (offset < len) {
@@ -179,9 +167,9 @@ static void j1939cat_scm_opt_stats(struct j1939cat_priv *priv, void *buf, int le
 	}
 }
 
-static int j1939cat_extract_serr(struct j1939cat_priv *priv)
+static int isobusfsd_extract_serr(struct isobusfsd_priv *priv)
 {
-	struct j1939cat_stats *stats = &priv->stats;
+	struct isobusfsd_stats *stats = &priv->stats;
 	struct sock_extended_err *serr = priv->serr;
 	struct scm_timestamping *tss = priv->tss;
 
@@ -205,7 +193,7 @@ static int j1939cat_extract_serr(struct j1939cat_priv *priv)
 			      serr->ee_errno);
 		stats->tskey = serr->ee_data;
 
-		j1939cat_print_timestamp(priv, j1939cat_tstype_to_str(serr->ee_info),
+		isobusfsd_print_timestamp(priv, isobusfsd_tstype_to_str(serr->ee_info),
 				     &tss->ts[0]);
 
 		if (serr->ee_info == SCM_TSTAMP_SCHED)
@@ -232,7 +220,7 @@ static int j1939cat_extract_serr(struct j1939cat_priv *priv)
 			warnx("serr: unknown ee_info: %i",
 			      serr->ee_info);
 
-		j1939cat_print_timestamp(priv, "  ABT", &tss->ts[0]);
+		isobusfsd_print_timestamp(priv, "  ABT", &tss->ts[0]);
 		warnx("serr: tx error: %i, %s", serr->ee_errno, strerror(serr->ee_errno));
 
 		return serr->ee_errno;
@@ -243,7 +231,7 @@ static int j1939cat_extract_serr(struct j1939cat_priv *priv)
 	return 0;
 }
 
-static int j1939cat_parse_cm(struct j1939cat_priv *priv, struct cmsghdr *cm)
+static int isobusfsd_parse_cm(struct isobusfsd_priv *priv, struct cmsghdr *cm)
 {
 	const size_t hdr_len = CMSG_ALIGN(sizeof(struct cmsghdr));
 
@@ -253,7 +241,7 @@ static int j1939cat_parse_cm(struct j1939cat_priv *priv, struct cmsghdr *cm)
 		void *jstats = (void *)CMSG_DATA(cm);
 
 		/* Activated with SOF_TIMESTAMPING_OPT_STATS */
-		j1939cat_scm_opt_stats(priv, jstats, cm->cmsg_len - hdr_len);
+		isobusfsd_scm_opt_stats(priv, jstats, cm->cmsg_len - hdr_len);
 	} else if (cm->cmsg_level == SOL_CAN_J1939 &&
 		   cm->cmsg_type == SCM_J1939_ERRQUEUE) {
 		priv->serr = (void *)CMSG_DATA(cm);
@@ -264,7 +252,7 @@ static int j1939cat_parse_cm(struct j1939cat_priv *priv, struct cmsghdr *cm)
 	return 0;
 }
 
-static int j1939cat_recv_err(struct j1939cat_priv *priv)
+static int isobusfsd_recv_err(struct isobusfsd_priv *priv)
 {
 	char control[100];
 	struct cmsghdr *cm;
@@ -285,18 +273,18 @@ static int j1939cat_recv_err(struct j1939cat_priv *priv)
 
 	for (cm = CMSG_FIRSTHDR(&msg); cm && cm->cmsg_len;
 	     cm = CMSG_NXTHDR(&msg, cm)) {
-		j1939cat_parse_cm(priv, cm);
+		isobusfsd_parse_cm(priv, cm);
 		if (priv->serr && priv->tss)
-			return j1939cat_extract_serr(priv);
+			return isobusfsd_extract_serr(priv);
 	}
 
 	return 0;
 }
 
-static int j1939cat_send_loop(struct j1939cat_priv *priv, int out_fd, char *buf,
+static int isobusfsd_send_loop(struct isobusfsd_priv *priv, int out_fd, char *buf,
 			  size_t buf_size)
 {
-	struct j1939cat_stats *stats = &priv->stats;
+	struct isobusfsd_stats *stats = &priv->stats;
 	ssize_t count;
 	char *tmp_buf = buf;
 	unsigned int events = POLLOUT | POLLERR;
@@ -328,7 +316,7 @@ static int j1939cat_send_loop(struct j1939cat_priv *priv, int out_fd, char *buf,
 			}
 
 			if (fds.revents & POLLERR) {
-				ret = j1939cat_recv_err(priv);
+				ret = isobusfsd_recv_err(priv);
 				if (ret == -EINTR)
 					continue;
 				else if (ret)
@@ -339,12 +327,12 @@ static int j1939cat_send_loop(struct j1939cat_priv *priv, int out_fd, char *buf,
 			}
 
 			if (fds.revents & POLLOUT) {
-				num_sent = j1939cat_send_one(priv, out_fd, tmp_buf, count);
+				num_sent = isobusfsd_send_one(priv, out_fd, tmp_buf, count);
 				if (num_sent < 0)
 					return num_sent;
 			}
 		} else {
-			num_sent = j1939cat_send_one(priv, out_fd, tmp_buf, count);
+			num_sent = isobusfsd_send_one(priv, out_fd, tmp_buf, count);
 			if (num_sent < 0)
 				return num_sent;
 		}
@@ -366,7 +354,7 @@ static int j1939cat_send_loop(struct j1939cat_priv *priv, int out_fd, char *buf,
 	return 0;
 }
 
-static int j1939cat_sendfile(struct j1939cat_priv *priv, int out_fd, int in_fd,
+static int isobusfsd_sendfile(struct isobusfsd_priv *priv, int out_fd, int in_fd,
 			 off_t *offset, size_t count)
 {
 	int ret = EXIT_SUCCESS;
@@ -409,7 +397,7 @@ static int j1939cat_sendfile(struct j1939cat_priv *priv, int out_fd, int in_fd,
 		if (num_read == 0)
 			break; /* EOF */
 
-		ret = j1939cat_send_loop(priv, out_fd, buf, num_read);
+		ret = isobusfsd_send_loop(priv, out_fd, buf, num_read);
 		if (ret)
 			goto do_free;
 
@@ -438,7 +426,7 @@ do_nofree:
 	return ret;
 }
 
-static size_t j1939cat_get_file_size(int fd)
+static size_t isobusfsd_get_file_size(int fd)
 {
 	off_t offset;
 
@@ -452,21 +440,21 @@ static size_t j1939cat_get_file_size(int fd)
 	return offset;
 }
 
-static int j1939cat_send(struct j1939cat_priv *priv)
+static int isobusfsd_send(struct isobusfsd_priv *priv)
 {
 	unsigned int size = 0;
 	unsigned int i;
 	int ret;
 
 	if (priv->todo_filesize)
-		size = j1939cat_get_file_size(priv->infile);
+		size = isobusfsd_get_file_size(priv->infile);
 
 	if (!size)
 		return EXIT_FAILURE;
 
 	for (i = 0; i < priv->repeat; i++) {
 		priv->round++;
-		ret = j1939cat_sendfile(priv, priv->sock, priv->infile, NULL, size);
+		ret = isobusfsd_sendfile(priv, priv->sock, priv->infile, NULL, size);
 		if (ret)
 			break;
 
@@ -477,7 +465,7 @@ static int j1939cat_send(struct j1939cat_priv *priv)
 	return ret;
 }
 
-static int j1939cat_recv_one(struct j1939cat_priv *priv, uint8_t *buf, size_t buf_size)
+static int isobusfsd_recv_one(struct isobusfsd_priv *priv, uint8_t *buf, size_t buf_size)
 {
 	int ret;
 
@@ -496,7 +484,7 @@ static int j1939cat_recv_one(struct j1939cat_priv *priv, uint8_t *buf, size_t bu
 	return EXIT_SUCCESS;
 }
 
-static int j1939cat_recv(struct j1939cat_priv *priv)
+static int isobusfsd_recv(struct isobusfsd_priv *priv)
 {
 	int ret = EXIT_SUCCESS;
 	size_t buf_size;
@@ -510,7 +498,7 @@ static int j1939cat_recv(struct j1939cat_priv *priv)
 	}
 
 	while (priv->todo_recv) {
-		ret = j1939cat_recv_one(priv, buf, buf_size);
+		ret = isobusfsd_recv_one(priv, buf, buf_size);
 		if (ret)
 			break;
 	}
@@ -519,7 +507,7 @@ static int j1939cat_recv(struct j1939cat_priv *priv)
 	return ret;
 }
 
-static int j1939cat_sock_prepare(struct j1939cat_priv *priv)
+static int isobusfsd_sock_prepare(struct isobusfsd_priv *priv)
 {
 	unsigned int sock_opt;
 	int value;
@@ -532,13 +520,11 @@ static int j1939cat_sock_prepare(struct j1939cat_priv *priv)
 		return EXIT_FAILURE;
 	}
 
-	if (priv->todo_prio >= 0) {
-		ret = setsockopt(priv->sock, SOL_CAN_J1939, SO_J1939_SEND_PRIO,
-				&priv->todo_prio, sizeof(priv->todo_prio));
-		if (ret < 0) {
-			warn("set priority %i", priv->todo_prio);
-			return EXIT_FAILURE;
-		}
+	ret = setsockopt(priv->sock, SOL_CAN_J1939, SO_J1939_SEND_PRIO,
+			&priv->prio, sizeof(priv->prio));
+	if (ret < 0) {
+		warn("set priority %i", priv->prio);
+		return EXIT_FAILURE;
 	}
 
 	value = 1;
@@ -566,24 +552,11 @@ static int j1939cat_sock_prepare(struct j1939cat_priv *priv)
 		return EXIT_FAILURE;
 	}
 
-	if (!priv->todo_connect)
-		return EXIT_SUCCESS;
-
-	if (!priv->valid_peername) {
-		warn("no peername supplied");
-		return EXIT_FAILURE;
-	}
-	ret = connect(priv->sock, (void *)&priv->peername,
-		      sizeof(priv->peername));
-	if (ret < 0) {
-		warn("connect()");
-		return EXIT_FAILURE;
-	}
-
 	return EXIT_SUCCESS;
 }
 
-static int j1939cat_parse_args(struct j1939cat_priv *priv, int argc, char *argv[])
+static int isobusfsd_parse_args(struct isobusfsd_priv *priv, int argc,
+				char *argv[])
 {
 	int opt;
 
@@ -606,20 +579,17 @@ static int j1939cat_parse_args(struct j1939cat_priv *priv, int argc, char *argv[
 		priv->todo_recv = 1;
 		break;
 	case 'p':
-		priv->todo_prio = strtoul(optarg, NULL, 0);
+		priv->prio = strtoul(optarg, NULL, 0);
 		break;
 	case 'P':
 		priv->polltimeout = strtoul(optarg, NULL, 0);
-		break;
-	case 'c':
-		priv->todo_connect = 1;
 		break;
 	case 'R':
 		priv->repeat = strtoul(optarg, NULL, 0);
 		if (priv->repeat < 1)
 			err(EXIT_FAILURE, "send/repeat count can't be less then 1\n");
 		break;
-	case 'h': /*fallthrough*/
+	case 'h': /* fallthroug */
 	default:
 		fputs(help_msg, stderr);
 		return EXIT_FAILURE;
@@ -627,15 +597,7 @@ static int j1939cat_parse_args(struct j1939cat_priv *priv, int argc, char *argv[
 
 	if (argv[optind]) {
 		if (strcmp("-", argv[optind]))
-			libj1939_parse_canaddr(argv[optind], &priv->sockname);
-		optind++;
-	}
-
-	if (argv[optind]) {
-		if (strcmp("-", argv[optind])) {
-			libj1939_parse_canaddr(argv[optind], &priv->peername);
-			priv->valid_peername = 1;
-		}
+			 libj1939_parse_canaddr(argv[optind], &priv->sockname);
 		optind++;
 	}
 
@@ -644,7 +606,7 @@ static int j1939cat_parse_args(struct j1939cat_priv *priv, int argc, char *argv[
 
 int main(int argc, char *argv[])
 {
-	struct j1939cat_priv *priv;
+	struct isobusfsd_priv *priv;
 	int ret;
 
 	priv = malloc(sizeof(*priv));
@@ -653,28 +615,28 @@ int main(int argc, char *argv[])
 
 	bzero(priv, sizeof(*priv));
 
-	priv->todo_prio = -1;
+	priv->prio = ISOBUSFS_DEFAULT_PRIO;
 	priv->infile = STDIN_FILENO;
 	priv->outfile = STDOUT_FILENO;
 	priv->max_transfer = J1939_MAX_ETP_PACKET_SIZE;
 	priv->polltimeout = 100000;
 	priv->repeat = 1;
 
-	j1939cat_init_sockaddr_can(&priv->sockname);
-	j1939cat_init_sockaddr_can(&priv->peername);
+	isobusfs_init_sockaddr_can(&priv->sockname, ISOBUS_PGN_CLIENT_TO_FS);
+	isobusfs_init_sockaddr_can(&priv->peername, ISOBUS_PGN_FS_TO_CLIENT);
 
-	ret = j1939cat_parse_args(priv, argc, argv);
+	ret = isobusfsd_parse_args(priv, argc, argv);
 	if (ret)
 		return ret;
 
-	ret = j1939cat_sock_prepare(priv);
+	ret = isobusfsd_sock_prepare(priv);
 	if (ret)
 		return ret;
 
 	if (priv->todo_recv)
-		ret = j1939cat_recv(priv);
+		ret = isobusfsd_recv(priv);
 	else
-		ret = j1939cat_send(priv);
+		ret = isobusfsd_send(priv);
 
 	close(priv->infile);
 	close(priv->outfile);
