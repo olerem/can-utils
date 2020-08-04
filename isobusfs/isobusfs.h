@@ -124,6 +124,28 @@ enum isobusfs_error {
 	ISOBUSFS_ERR_ = 45,
 };
 
+struct isobusfs_priv {
+	int sock;
+	int infile;
+	int outfile;
+	size_t max_transfer;
+	unsigned long repeat;
+	unsigned long round;
+	int prio;
+
+	bool valid_peername;
+	bool todo_recv;
+	bool todo_filesize;
+
+	unsigned long polltimeout;
+
+	struct sockaddr_can sockname;
+	struct sockaddr_can peername;
+
+	struct sock_extended_err *serr;
+	struct scm_timestamping *tss;
+	struct isobusfsd_stats stats;
+};
 
 void isobusfs_init_sockaddr_can(struct sockaddr_can *sac, u32 pgn);
 
