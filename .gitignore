@@ -33,6 +33,8 @@ GNUmakefile.in
 /canplayer
 /cansend
 /cansniffer
+/isobusfsd
+/isobusfs-client
 /isotpdump
 /isotpperf
 /isotprecv
