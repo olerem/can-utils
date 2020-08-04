@@ -43,6 +43,11 @@ set(PROGRAMS_J1939
     testj1939
 )
 
+set(PROGRAMS_ISOBUSFS
+    isobusfsd
+    isobusfs-client
+)
+
 set(PROGRAMS
     ${PROGRAMS_CANLIB}
     bcmserver
