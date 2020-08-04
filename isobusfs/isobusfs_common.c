@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2020 Pengutronix, Oleksij Rempel <o.rempel@pengutronix.de>
 
 
-
+#if 0
 static const char *isobusfs_error_to_str(enum j1939_xtp_abort error)
 {
 	switch (error) {
@@ -43,12 +43,66 @@ static const char *isobusfs_error_to_str(enum j1939_xtp_abort error)
 	}
 }
 
+#endif
+
 void isobusfs_init_sockaddr_can(struct sockaddr_can *sac, u32 pgn)
 {
 	sac->can_family = AF_CAN;
 	sac->can_addr.j1939.addr = J1939_NO_ADDR;
 	sac->can_addr.j1939.name = J1939_NO_NAME;
 	sac->can_addr.j1939.pgn = pgn;
+}
+
+static int isobusfs_buf_to_cmd(u8 *buf)
+{
+	return (buf[0] & 0xf0) >> 4;
+}
+
+static int isobusfs_buf_to_function(u8 *buf)
+{
+	return (buf[0] & 0xf);
+}
+
+static int isobusfsd_rx_cg_connection_managment(struct isobusfs_priv *priv,
+						u8 *buf, size_t size)
+{
+	int function = isobusfs_buf_to_function(buf);
+
+	switch (cmd) {
+	case ISOBUSFS_CM_F_CC_MAINTENANCE:
+		break;
+	case ISOBUSFS_CM_GET_FS_PROPERTIES:
+		break;
+	default:
+		warn("%s: unsupported function: %i", __func__, cmd);
+		return -EINVAL;
+	}
+
+	return ret;
+}
+
+int isobusfs_rx_buf(struct isobusfs_priv *priv, u8 *buf, size_t size)
+{
+	int cmd = isobusfs_buf_to_cmd(buf);
+
+	switch (cmd) {
+	case ISOBUSFS_CG_CONNECTION_MANAGMENT:
+		ret = isobusfsd_rx_cg_connection_managment(priv, buf, size);
+		break;
+	case ISOBUSFS_CG_DIRECTORY_HANDLING:
+		break;
+	case ISOBUSFS_CG_FILE_ACCESS:
+		break;
+	case ISOBUSFS_CG_FILE_HANDLING:
+		break;
+	case ISOBUSFS_CG_VOLUME_HANDLING:
+		break;
+	default:
+		warn("%s: unsupported command: %i", __func__, cmd);
+		return -EINVAL;
+	}
+
+	return ret;
 }
 
 
