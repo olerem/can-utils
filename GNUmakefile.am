@@ -11,6 +11,7 @@ LDADD = \
 
 noinst_HEADERS = \
 	canframelen.h \
+	isobusfs/isobusfs.h \
 	lib.h \
 	libj1939.h \
 	terminal.h \
@@ -38,6 +39,12 @@ libcan_la_SOURCES = \
 libj1939_la_SOURCES = \
 	libj1939.c
 
+lib_LTLIBRARIES = \
+	libisobusfs.la
+
+libisobusfs_la_SOURCES = \
+	isobusfs/isobusfs_common.c
+
 bin_PROGRAMS = \
 	asc2log \
 	bcmserver \
@@ -51,6 +58,8 @@ bin_PROGRAMS = \
 	canplayer \
 	cansend \
 	cansniffer \
+	isobusfs-client \
+	isobusfsd \
 	isotpdump \
 	isotpperf \
 	isotprecv \
@@ -68,6 +77,20 @@ bin_PROGRAMS = \
 	slcand \
 	slcanpty \
 	testj1939
+
+isobusfs_client_SOURCES = \
+	isobusfs/isobusfs_client.c
+
+isobusfs_client_LDADD = \
+	libisobusfs.la \
+	libj1939.la
+
+isobusfsd_SOURCES = \
+	isobusfs/isobusfsd.c
+
+isobusfsd_LDADD = \
+	libisobusfs.la \
+	libj1939.la
 
 j1939acd_LDADD = libj1939.la
 j1939cat_LDADD = libj1939.la
