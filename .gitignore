@@ -3,6 +3,7 @@
 *.lo
 *.la
 .deps
+.dirstamp
 .libs
 
 configure
@@ -33,8 +34,9 @@ GNUmakefile.in
 /canplayer
 /cansend
 /cansniffer
-/isobusfsd
 /isobusfs-client
+/isobusfs-client
+/isobusfsd
 /isotpdump
 /isotpperf
 /isotprecv
