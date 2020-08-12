@@ -18,55 +18,14 @@
 #include <linux/net_tstamp.h>
 #include <linux/socket.h>
 
-#include "libj1939.h"
+#include "isobusfs.h"
+
 #define J1939_MAX_ETP_PACKET_SIZE (7 * 0x00ffffff)
 #define JCAT_BUF_SIZE (1000 * 1024)
 
-/*
- * min()/max()/clamp() macros that also do
- * strict type-checking.. See the
- * "unnecessary" pointer comparison.
- */
-#define min(x, y) ({				\
-	typeof(x) _min1 = (x);			\
-	typeof(y) _min2 = (y);			\
-	(void) (&_min1 == &_min2);		\
-	_min1 < _min2 ? _min1 : _min2; })
-
-
-struct isobusfs_client_stats {
-	int err;
-	uint32_t tskey;
-	uint32_t send;
-};
-
-struct isobusfs_client_priv {
-	int sock;
-	int infile;
-	int outfile;
-	size_t max_transfer;
-	unsigned long repeat;
-	unsigned long round;
-	int prio;
-
-	bool valid_peername;
-	bool todo_recv;
-	bool todo_filesize;
-	bool todo_connect;
-
-	unsigned long polltimeout;
-
-	struct sockaddr_can sockname;
-	struct sockaddr_can peername;
-
-	struct sock_extended_err *serr;
-	struct scm_timestamping *tss;
-	struct isobusfs_client_stats stats;
-};
-
 static const char help_msg[] =
-	"isobusfs_client: netcat-like tool for j1939\n"
-	"Usage: isobusfs_client [options] FROM TO\n"
+	"isobusfsd: netcat-like tool for j1939\n"
+	"Usage: isobusfsd [options] FROM TO\n"
 	" FROM / TO	- or [IFACE][:[SA][,[PGN][,NAME]]]\n"
 	"Options:\n"
 	" -i <infile>	(default stdin)\n"
@@ -74,17 +33,16 @@ static const char help_msg[] =
 	" -r		Receive data\n"
 	" -P <timeout>  poll timeout in milliseconds before sending data.\n"
 	"		With this option send() will be used with MSG_DONTWAIT flag.\n"
-	" -R <count>	Set send repeat count. Default: 1\n"
 	"\n"
 	"Example:\n"
-	"isobusfs_client -i some_file_to_send  can0:0x80 :0x90,0x12300\n"
-	"isobusfs_client can0:0x90 -r > /tmp/some_file_to_receive\n"
+	"isobusfsd -i some_file_to_send  can0:0x80 :0x90,0x12300\n"
+	"isobusfsd can0:0x90 -r > /tmp/some_file_to_receive\n"
 	"\n"
 	;
 
 static const char optstring[] = "?hi:vs:rp:P:R:";
 
-static ssize_t isobusfs_client_send_one(struct isobusfs_client_priv *priv, int out_fd,
+static ssize_t isobusfsd_send_one(struct isobusfs_priv *priv, int out_fd,
 			     const void *buf, size_t buf_size)
 {
 	ssize_t num_sent;
@@ -93,7 +51,7 @@ static ssize_t isobusfs_client_send_one(struct isobusfs_client_priv *priv, int o
 	if (priv->polltimeout)
 		flags |= MSG_DONTWAIT;
 
-	if (priv->valid_peername && !priv->todo_connect)
+	if (priv->valid_peername)
 		num_sent = sendto(out_fd, buf, buf_size, flags,
 				  (struct sockaddr *)&priv->peername,
 				  sizeof(priv->peername));
@@ -118,10 +76,10 @@ static ssize_t isobusfs_client_send_one(struct isobusfs_client_priv *priv, int o
 	return num_sent;
 }
 
-static void isobusfs_client_print_timestamp(struct isobusfs_client_priv *priv, const char *name,
+static void isobusfsd_print_timestamp(struct isobusfs_priv *priv, const char *name,
 			      struct timespec *cur)
 {
-	struct isobusfs_client_stats *stats = &priv->stats;
+	struct isobusfs_stats *stats = &priv->stats;
 
 	if (!(cur->tv_sec | cur->tv_nsec))
 		return;
@@ -133,7 +91,7 @@ static void isobusfs_client_print_timestamp(struct isobusfs_client_priv *priv, c
 	fprintf(stderr, "\n");
 }
 
-static const char *isobusfs_client_tstype_to_str(int tstype)
+static const char *isobusfsd_tstype_to_str(int tstype)
 {
 	switch (tstype) {
 	case SCM_TSTAMP_SCHED:
@@ -148,9 +106,9 @@ static const char *isobusfs_client_tstype_to_str(int tstype)
 }
 
 /* Check the stats of SCM_TIMESTAMPING_OPT_STATS */
-static void isobusfs_client_scm_opt_stats(struct isobusfs_client_priv *priv, void *buf, int len)
+static void isobusfsd_scm_opt_stats(struct isobusfs_priv *priv, void *buf, int len)
 {
-	struct isobusfs_client_stats *stats = &priv->stats;
+	struct isobusfs_stats *stats = &priv->stats;
 	int offset = 0;
 
 	while (offset < len) {
@@ -168,9 +126,9 @@ static void isobusfs_client_scm_opt_stats(struct isobusfs_client_priv *priv, voi
 	}
 }
 
-static int isobusfs_client_extract_serr(struct isobusfs_client_priv *priv)
+static int isobusfsd_extract_serr(struct isobusfs_priv *priv)
 {
-	struct isobusfs_client_stats *stats = &priv->stats;
+	struct isobusfs_stats *stats = &priv->stats;
 	struct sock_extended_err *serr = priv->serr;
 	struct scm_timestamping *tss = priv->tss;
 
@@ -194,7 +152,7 @@ static int isobusfs_client_extract_serr(struct isobusfs_client_priv *priv)
 			      serr->ee_errno);
 		stats->tskey = serr->ee_data;
 
-		isobusfs_client_print_timestamp(priv, isobusfs_client_tstype_to_str(serr->ee_info),
+		isobusfsd_print_timestamp(priv, isobusfsd_tstype_to_str(serr->ee_info),
 				     &tss->ts[0]);
 
 		if (serr->ee_info == SCM_TSTAMP_SCHED)
@@ -221,7 +179,7 @@ static int isobusfs_client_extract_serr(struct isobusfs_client_priv *priv)
 			warnx("serr: unknown ee_info: %i",
 			      serr->ee_info);
 
-		isobusfs_client_print_timestamp(priv, "  ABT", &tss->ts[0]);
+		isobusfsd_print_timestamp(priv, "  ABT", &tss->ts[0]);
 		warnx("serr: tx error: %i, %s", serr->ee_errno, strerror(serr->ee_errno));
 
 		return serr->ee_errno;
@@ -232,7 +190,7 @@ static int isobusfs_client_extract_serr(struct isobusfs_client_priv *priv)
 	return 0;
 }
 
-static int isobusfs_client_parse_cm(struct isobusfs_client_priv *priv, struct cmsghdr *cm)
+static int isobusfsd_parse_cm(struct isobusfs_priv *priv, struct cmsghdr *cm)
 {
 	const size_t hdr_len = CMSG_ALIGN(sizeof(struct cmsghdr));
 
@@ -242,7 +200,7 @@ static int isobusfs_client_parse_cm(struct isobusfs_client_priv *priv, struct cm
 		void *jstats = (void *)CMSG_DATA(cm);
 
 		/* Activated with SOF_TIMESTAMPING_OPT_STATS */
-		isobusfs_client_scm_opt_stats(priv, jstats, cm->cmsg_len - hdr_len);
+		isobusfsd_scm_opt_stats(priv, jstats, cm->cmsg_len - hdr_len);
 	} else if (cm->cmsg_level == SOL_CAN_J1939 &&
 		   cm->cmsg_type == SCM_J1939_ERRQUEUE) {
 		priv->serr = (void *)CMSG_DATA(cm);
@@ -253,9 +211,9 @@ static int isobusfs_client_parse_cm(struct isobusfs_client_priv *priv, struct cm
 	return 0;
 }
 
-static int isobusfs_client_recv_err(struct isobusfs_client_priv *priv)
+static int isobusfsd_recv_err(struct isobusfs_priv *priv)
 {
-	char control[100];
+	char control[200];
 	struct cmsghdr *cm;
 	int ret;
 	struct msghdr msg = {
@@ -274,18 +232,18 @@ static int isobusfs_client_recv_err(struct isobusfs_client_priv *priv)
 
 	for (cm = CMSG_FIRSTHDR(&msg); cm && cm->cmsg_len;
 	     cm = CMSG_NXTHDR(&msg, cm)) {
-		isobusfs_client_parse_cm(priv, cm);
+		isobusfsd_parse_cm(priv, cm);
 		if (priv->serr && priv->tss)
-			return isobusfs_client_extract_serr(priv);
+			return isobusfsd_extract_serr(priv);
 	}
 
 	return 0;
 }
 
-static int isobusfs_client_send_loop(struct isobusfs_client_priv *priv, int out_fd, char *buf,
+static int isobusfsd_send_loop(struct isobusfs_priv *priv, int out_fd, char *buf,
 			  size_t buf_size)
 {
-	struct isobusfs_client_stats *stats = &priv->stats;
+	struct isobusfs_stats *stats = &priv->stats;
 	ssize_t count;
 	char *tmp_buf = buf;
 	unsigned int events = POLLOUT | POLLERR;
@@ -317,7 +275,7 @@ static int isobusfs_client_send_loop(struct isobusfs_client_priv *priv, int out_
 			}
 
 			if (fds.revents & POLLERR) {
-				ret = isobusfs_client_recv_err(priv);
+				ret = isobusfsd_recv_err(priv);
 				if (ret == -EINTR)
 					continue;
 				else if (ret)
@@ -328,12 +286,12 @@ static int isobusfs_client_send_loop(struct isobusfs_client_priv *priv, int out_
 			}
 
 			if (fds.revents & POLLOUT) {
-				num_sent = isobusfs_client_send_one(priv, out_fd, tmp_buf, count);
+				num_sent = isobusfsd_send_one(priv, out_fd, tmp_buf, count);
 				if (num_sent < 0)
 					return num_sent;
 			}
 		} else {
-			num_sent = isobusfs_client_send_one(priv, out_fd, tmp_buf, count);
+			num_sent = isobusfsd_send_one(priv, out_fd, tmp_buf, count);
 			if (num_sent < 0)
 				return num_sent;
 		}
@@ -345,17 +303,13 @@ static int isobusfs_client_send_loop(struct isobusfs_client_priv *priv, int out_
 			     __func__);
 			return -EINVAL;
 		}
-		if (!count) {
-			if (priv->repeat == priv->round)
-				events = POLLERR;
-			else
-				tx_done = true;
-		}
+		if (!count)
+			tx_done = true;
 	}
 	return 0;
 }
 
-static int isobusfs_client_sendfile(struct isobusfs_client_priv *priv, int out_fd, int in_fd,
+static int isobusfsd_sendfile(struct isobusfs_priv *priv, int out_fd, int in_fd,
 			 off_t *offset, size_t count)
 {
 	int ret = EXIT_SUCCESS;
@@ -398,7 +352,7 @@ static int isobusfs_client_sendfile(struct isobusfs_client_priv *priv, int out_f
 		if (num_read == 0)
 			break; /* EOF */
 
-		ret = isobusfs_client_send_loop(priv, out_fd, buf, num_read);
+		ret = isobusfsd_send_loop(priv, out_fd, buf, num_read);
 		if (ret)
 			goto do_free;
 
@@ -427,7 +381,7 @@ do_nofree:
 	return ret;
 }
 
-static size_t isobusfs_client_get_file_size(int fd)
+static size_t isobusfsd_get_file_size(int fd)
 {
 	off_t offset;
 
@@ -441,74 +395,124 @@ static size_t isobusfs_client_get_file_size(int fd)
 	return offset;
 }
 
-static int isobusfs_client_send(struct isobusfs_client_priv *priv)
+static int isobusfsd_send(struct isobusfs_priv *priv)
 {
 	unsigned int size = 0;
-	unsigned int i;
 	int ret;
 
 	if (priv->todo_filesize)
-		size = isobusfs_client_get_file_size(priv->infile);
+		size = isobusfsd_get_file_size(priv->infile);
 
 	if (!size)
 		return EXIT_FAILURE;
 
-	for (i = 0; i < priv->repeat; i++) {
-		priv->round++;
-		ret = isobusfs_client_sendfile(priv, priv->sock, priv->infile, NULL, size);
-		if (ret)
-			break;
+	ret = isobusfsd_sendfile(priv, priv->sock, priv->infile, NULL, size);
+	if (ret)
+		return EXIT_FAILURE;
 
-		if (lseek(priv->infile, 0, SEEK_SET) == -1)
-			err(1, "%s lseek() start\n", __func__);
-	}
+	if (lseek(priv->infile, 0, SEEK_SET) == -1)
+		err(1, "%s lseek() start\n", __func__);
 
 	return ret;
 }
 
-static int isobusfs_client_recv_one(struct isobusfs_client_priv *priv, uint8_t *buf, size_t buf_size)
+static int isobusfsd_recv_one(struct isobusfs_priv *priv,
+			      struct isobusfs_msg *msg)
 {
 	int ret;
 
-	ret = recv(priv->sock, buf, buf_size, 0);
+	int flags = 0;
+
+	//flags |= MSG_DONTWAIT;
+
+	warn("%s:%i", __func__, __LINE__);
+	ret = recvfrom(priv->sock, &msg->buf[0], msg->buf_size, flags,
+		       (struct sockaddr *)&msg->peername, &msg->peer_addr_len);
+
+	warn("%s:%i", __func__, __LINE__);
 	if (ret < 0) {
-		warn("recvf()");
+		warn("recvfrom()");
 		return EXIT_FAILURE;
 	}
 
-	ret = write(priv->outfile, buf, ret);
+	if (ret < ISOBUSFS_MIN_TRANSFER_LENGH) {
+		warn("buf is less then min transfer: %i", ret);
+		return EXIT_FAILURE;
+	}
+
+	/* TODO: handle transfer more then allowed */
+
+	warn("%s:%i", __func__, __LINE__);
+	ret = isobusfs_ser_rx_buf(priv, msg);
 	if (ret < 0) {
-		warn("write stdout()");
+		warn("process buffer");
 		return EXIT_FAILURE;
 	}
 
 	return EXIT_SUCCESS;
 }
 
-static int isobusfs_client_recv(struct isobusfs_client_priv *priv)
+static int isobusfsd_recv(struct isobusfs_priv *priv)
 {
+	unsigned int events = POLLIN | POLLERR;
+	struct isobusfs_msg *msg;
 	int ret = EXIT_SUCCESS;
-	size_t buf_size;
-	uint8_t *buf;
 
-	buf_size = priv->max_transfer;
-	buf = malloc(buf_size);
-	if (!buf) {
-		warn("can't allocate rx buf");
+	msg = malloc(sizeof(*msg));
+	if (!msg) {
+		warn("can't allocate rx msg struct");
 		return EXIT_FAILURE;;
 	}
+	msg->buf_size = ISOBUSFS_MAX_TRANSFER_LENGH;
+	msg->peer_addr_len = sizeof(msg->peername);
 
 	while (priv->todo_recv) {
-		ret = isobusfs_client_recv_one(priv, buf, buf_size);
-		if (ret)
-			break;
+		struct pollfd fds = {
+			.fd = priv->sock,
+			.events = events,
+		};
+		int ret;
+
+		ret = poll(&fds, 1, priv->polltimeout);
+		if (ret == -EINTR)
+			continue;
+		else if (ret < 0)
+			return -errno;
+		else if (!ret)
+			return -ETIME;
+
+		if (!(fds.revents & events)) {
+			warn("%s: something else is wrong", __func__);
+			return -EIO;
+		}
+
+		if (fds.revents & POLLERR) {
+			ret = isobusfsd_recv_err(priv);
+			if (ret == -EINTR)
+				continue;
+			else if (ret)
+				return ret;
+		}
+
+		if (fds.revents & POLLIN) {
+			/* ignore errors? */
+			isobusfsd_recv_one(priv, msg);
+		}
+
+#if 0
+		if (fds.revents & POLLOUT) {
+			num_sent = isobusfsd_send_one(priv, out_fd, tmp_buf, count);
+			if (num_sent < 0)
+				return num_sent;
+		}
+#endif
 	}
 
-	free(buf);
+	free(msg);
 	return ret;
 }
 
-static int isobusfs_client_sock_prepare(struct isobusfs_client_priv *priv)
+static int isobusfsd_sock_prepare(struct isobusfs_priv *priv)
 {
 	unsigned int sock_opt;
 	int value;
@@ -553,25 +557,11 @@ static int isobusfs_client_sock_prepare(struct isobusfs_client_priv *priv)
 		return EXIT_FAILURE;
 	}
 
-	if (!priv->todo_connect)
-		return EXIT_SUCCESS;
-
-	if (!priv->valid_peername) {
-		warn("no peername supplied");
-		return EXIT_FAILURE;
-	}
-	ret = connect(priv->sock, (void *)&priv->peername,
-		      sizeof(priv->peername));
-	if (ret < 0) {
-		warn("connect()");
-		return EXIT_FAILURE;
-	}
-
 	return EXIT_SUCCESS;
 }
 
-static int isobusfs_client_parse_args(struct isobusfs_client_priv *priv,
-				      int argc, char *argv[])
+static int isobusfsd_parse_args(struct isobusfs_priv *priv, int argc,
+				char *argv[])
 {
 	int opt;
 
@@ -586,9 +576,9 @@ static int isobusfs_client_parse_args(struct isobusfs_client_priv *priv,
 		break;
 	case 's':
 		priv->max_transfer = strtoul(optarg, NULL, 0);
-		if (priv->max_transfer > J1939_MAX_ETP_PACKET_SIZE)
+		if (priv->max_transfer > ISOBUSFS_MAX_TRANSFER_LENGH)
 			err(EXIT_FAILURE, "used value (%zu) is bigger then allowed maximal size: %u.\n",
-			    priv->max_transfer, J1939_MAX_ETP_PACKET_SIZE);
+			    priv->max_transfer, ISOBUSFS_MAX_TRANSFER_LENGH);
 		break;
 	case 'r':
 		priv->todo_recv = 1;
@@ -599,15 +589,7 @@ static int isobusfs_client_parse_args(struct isobusfs_client_priv *priv,
 	case 'P':
 		priv->polltimeout = strtoul(optarg, NULL, 0);
 		break;
-	case 'c':
-		priv->todo_connect = 1;
-		break;
-	case 'R':
-		priv->repeat = strtoul(optarg, NULL, 0);
-		if (priv->repeat < 1)
-			err(EXIT_FAILURE, "send/repeat count can't be less then 1\n");
-		break;
-	case 'h': /*fallthrough*/
+	case 'h': /* fallthroug */
 	default:
 		fputs(help_msg, stderr);
 		return EXIT_FAILURE;
@@ -615,15 +597,7 @@ static int isobusfs_client_parse_args(struct isobusfs_client_priv *priv,
 
 	if (argv[optind]) {
 		if (strcmp("-", argv[optind]))
-			libj1939_parse_canaddr(argv[optind], &priv->sockname);
-		optind++;
-	}
-
-	if (argv[optind]) {
-		if (strcmp("-", argv[optind])) {
-			libj1939_parse_canaddr(argv[optind], &priv->peername);
-			priv->valid_peername = 1;
-		}
+			 libj1939_parse_canaddr(argv[optind], &priv->sockname);
 		optind++;
 	}
 
@@ -632,7 +606,7 @@ static int isobusfs_client_parse_args(struct isobusfs_client_priv *priv,
 
 int main(int argc, char *argv[])
 {
-	struct isobusfs_client_priv *priv;
+	struct isobusfs_priv *priv;
 	int ret;
 
 	priv = malloc(sizeof(*priv));
@@ -644,25 +618,23 @@ int main(int argc, char *argv[])
 	priv->prio = ISOBUSFS_DEFAULT_PRIO;
 	priv->infile = STDIN_FILENO;
 	priv->outfile = STDOUT_FILENO;
-	priv->max_transfer = J1939_MAX_ETP_PACKET_SIZE;
+	priv->max_transfer = ISOBUSFS_MAX_TRANSFER_LENGH;
 	priv->polltimeout = 100000;
-	priv->repeat = 1;
+	priv->todo_recv = true;
 
-	isobusfs_init_sockaddr_can(&priv->sockname, ISOBUS_PGN_FS_TO_CLIENT);
-	isobusfs_init_sockaddr_can(&priv->peername, ISOBUS_PGN_CLIENT_TO_FS);
+	isobusfs_init_sockaddr_can(&priv->sockname, ISOBUS_PGN_FS);
+	isobusfs_init_sockaddr_can(&priv->peername, ISOBUS_PGN_CLIENT);
 
-	ret = isobusfs_client_parse_args(priv, argc, argv);
+	ret = isobusfsd_parse_args(priv, argc, argv);
 	if (ret)
 		return ret;
 
-	ret = isobusfs_client_sock_prepare(priv);
+	ret = isobusfsd_sock_prepare(priv);
 	if (ret)
 		return ret;
 
-	if (priv->todo_recv)
-		ret = isobusfs_client_recv(priv);
-	else
-		ret = isobusfs_client_send(priv);
+	ret = isobusfsd_recv(priv);
+	//	ret = isobusfsd_send(priv);
 
 	close(priv->infile);
 	close(priv->outfile);
