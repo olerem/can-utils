@@ -325,6 +325,36 @@ int isobusfs_ser_rx_buf(struct isobusfs_priv *priv, struct isobusfs_msg *msg)
 }
 
 /* client side rx */
+
+static int isobusfs_cl_property_res(struct isobusfs_priv *priv,
+				     struct isobusfs_msg *msg)
+{
+	uint8_t buf[ISOBUSFS_MIN_TRANSFER_LENGH];
+	int ret;
+
+	warn("%s: got resposne", __func__);
+	return 0;
+}
+
+/* Command group: connection management */
+static int isobusfs_cl_rx_cg_cm(struct isobusfs_priv *priv,
+				 struct isobusfs_msg *msg)
+{
+	int func = isobusfs_buf_to_function(msg->buf);
+	int ret = 0;
+
+	switch (func) {
+	case ISOBUSFS_CM_GET_FS_PROPERTIES:
+		ret = isobusfs_cl_property_res(priv, msg);
+		break;
+	default:
+		warn("%s: unsupported function: %i", __func__, func);
+		return -EINVAL;
+	}
+
+	return ret;
+}
+
 int isobusfs_cl_rx_buf(struct isobusfs_priv *priv, struct isobusfs_msg *msg)
 {
 	int cmd = isobusfs_buf_to_cmd(msg->buf);
@@ -332,7 +362,7 @@ int isobusfs_cl_rx_buf(struct isobusfs_priv *priv, struct isobusfs_msg *msg)
 
 	switch (cmd) {
 	case ISOBUSFS_CG_CONNECTION_MANAGMENT:
-		ret = isobusfs_ser_rx_cg_cm(priv, msg);
+		ret = isobusfs_cl_rx_cg_cm(priv, msg);
 		break;
 	case ISOBUSFS_CG_DIRECTORY_HANDLING:
 		ret = isobusfs_ser_rx_cg_dh(priv, msg);
