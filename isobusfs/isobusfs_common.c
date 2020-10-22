@@ -101,6 +101,96 @@ static ssize_t isobusfs_cl_send(struct isobusfs_priv *priv,
 	return num_sent;
 }
 
+static int isobusfs_cl_recv_one(struct isobusfs_priv *priv,
+			      struct isobusfs_msg *msg)
+{
+	int ret;
+
+	int flags = 0;
+
+	//flags |= MSG_DONTWAIT;
+
+	warn("%s:%i", __func__, __LINE__);
+	ret = recvfrom(priv->sock, &msg->buf[0], msg->buf_size, flags,
+		       (struct sockaddr *)&msg->peername, &msg->peer_addr_len);
+
+	warn("%s:%i", __func__, __LINE__);
+	if (ret < 0) {
+		warn("recvfrom()");
+		return EXIT_FAILURE;
+	}
+
+	if (ret < ISOBUSFS_MIN_TRANSFER_LENGH) {
+		warn("buf is less then min transfer: %i", ret);
+		return EXIT_FAILURE;
+	}
+
+	/* TODO: handle transfer more then allowed */
+
+	warn("%s:%i", __func__, __LINE__);
+	ret = isobusfs_cl_rx_buf(priv, msg);
+	if (ret < 0) {
+		warn("process buffer");
+		return EXIT_FAILURE;
+	}
+
+	return EXIT_SUCCESS;
+}
+
+static int isobusfs_cl_recv(struct isobusfs_priv *priv)
+{
+	unsigned int events = POLLIN;
+	struct isobusfs_msg *msg;
+	int ret = EXIT_SUCCESS;
+
+	msg = malloc(sizeof(*msg));
+	if (!msg) {
+		warn("can't allocate rx msg struct");
+		return EXIT_FAILURE;;
+	}
+	msg->buf_size = ISOBUSFS_MAX_TRANSFER_LENGH;
+	msg->peer_addr_len = sizeof(msg->peername);
+
+	while (priv->todo_recv) {
+		struct pollfd fds = {
+			.fd = priv->sock,
+			.events = events,
+		};
+		int ret;
+
+		ret = poll(&fds, 1, priv->polltimeout);
+		if (ret == -EINTR)
+			continue;
+		else if (ret < 0)
+			return -errno;
+		else if (!ret)
+			return -ETIME;
+
+		if (!(fds.revents & events)) {
+			warn("%s: something else is wrong", __func__);
+			return -EIO;
+		}
+
+		if (fds.revents & POLLIN) {
+			/* ignore errors? */
+			isobusfs_cl_recv_one(priv, msg);
+		}
+
+#if 0
+		if (fds.revents & POLLOUT) {
+			num_sent = isobusfs_client_send_one(priv, out_fd, tmp_buf, count);
+			if (num_sent < 0)
+				return num_sent;
+		}
+#endif
+	}
+
+	free(msg);
+	return ret;
+}
+
+
+
 static ssize_t isobusfs_ser_sendto(struct isobusfs_priv *priv,
 			       struct isobusfs_msg *msg,
 			       const void *buf, size_t buf_size)
@@ -196,6 +286,64 @@ static int isobusfs_ser_rx_cg_cm(struct isobusfs_priv *priv,
 	return ret;
 }
 
+static int isobusfs_ser_dh_get_cur_dir(struct isobusfs_priv *priv,
+				       struct isobusfs_msg *msg)
+{
+	uint8_t buf[ISOBUSFS_MIN_TRANSFER_LENGH];
+	int ret;
+
+	/* not used space should be filled with 0xff */
+	memset(buf, 0xff, ARRAY_SIZE(buf));
+	buf[0] = isobusfs_cmd_function_to_buf(ISOBUSFS_CG_CONNECTION_MANAGMENT,
+					      ISOBUSFS_CM_GET_FS_PROPERTIES_RES);
+	/* Version number:
+	 * 0 - Draft
+	 * 1 - Final draft
+	 * 2 - First published version
+	 */
+	buf[1] = 2;
+	/* Maximum Number of Simultaneously Open Files */
+	buf[2] = ISOBUSFS_MAX_OPENED_FILES;
+	/* File Server Capabilities */
+	// TODO: set proper caps
+	buf[3] = 0;
+
+	ret = isobusfs_ser_sendto(priv, msg, &buf[0], ARRAY_SIZE(buf));
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
+static int isobusfs_ser_dh_set_cur_dir(struct isobusfs_priv *priv,
+				       struct isobusfs_msg *msg)
+{
+	uint8_t buf[ISOBUSFS_MIN_TRANSFER_LENGH];
+	int ret;
+
+	/* not used space should be filled with 0xff */
+	memset(buf, 0xff, ARRAY_SIZE(buf));
+	buf[0] = isobusfs_cmd_function_to_buf(ISOBUSFS_CG_CONNECTION_MANAGMENT,
+					      ISOBUSFS_CM_GET_FS_PROPERTIES_RES);
+	/* Version number:
+	 * 0 - Draft
+	 * 1 - Final draft
+	 * 2 - First published version
+	 */
+	buf[1] = 2;
+	/* Maximum Number of Simultaneously Open Files */
+	buf[2] = ISOBUSFS_MAX_OPENED_FILES;
+	/* File Server Capabilities */
+	// TODO: set proper caps
+	buf[3] = 0;
+
+	ret = isobusfs_ser_sendto(priv, msg, &buf[0], ARRAY_SIZE(buf));
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
 /* Command group: directory handling */
 static int isobusfs_ser_rx_cg_dh(struct isobusfs_priv *priv,
 				 struct isobusfs_msg *msg)
@@ -205,8 +353,10 @@ static int isobusfs_ser_rx_cg_dh(struct isobusfs_priv *priv,
 
 	switch (func) {
 	case ISOBUSFS_DH_F_GET_CURRENT_DIR_REQ:
+		ret = isobusfs_ser_dh_get_cur_dir(priv, msg);
 		break;
 	case ISOBUSFS_DH_F_CHANGE_CURRENT_DIR_REQ:
+		ret = isobusfs_ser_dh_set_cur_dir(priv, msg);
 		break;
 	default:
 		ret = isobusfs_ser_send_error(priv, msg,
@@ -385,7 +535,7 @@ int isobusfs_cl_rx_buf(struct isobusfs_priv *priv, struct isobusfs_msg *msg)
 }
 
 /* client tx side */
-
+/* Get File Server Properties Request */
 int isobusfs_cl_property_req(struct isobusfs_priv *priv)
 {
 	uint8_t buf[ISOBUSFS_MIN_TRANSFER_LENGH];
@@ -400,5 +550,35 @@ int isobusfs_cl_property_req(struct isobusfs_priv *priv)
 	if (ret < 0)
 		return ret;
 
+	ret = isobusfs_cl_recv(priv);
+	if (ret < 0)
+		return ret;
+
 	return 0;
 }
+
+/* Get Current Directory Request */
+int isobusfs_cl_get_cur_dir_req(struct isobusfs_priv *priv)
+{
+	uint8_t buf[ISOBUSFS_MIN_TRANSFER_LENGH];
+	uint8_t tan;
+	int ret;
+
+	/* not used space should be filled with 0xff */
+	memset(buf, 0xff, ARRAY_SIZE(buf));
+	buf[0] = isobusfs_cmd_function_to_buf(ISOBUSFS_CG_DIRECTORY_HANDLING,
+					      ISOBUSFS_DH_F_GET_CURRENT_DIR_REQ);
+	tan = priv->tan++;
+
+	buf[1] = tan;
+	ret = isobusfs_cl_send(priv, &buf[0], ARRAY_SIZE(buf));
+	if (ret < 0)
+		return ret;
+
+	ret = isobusfs_cl_recv(priv);
+	if (ret < 0)
+		return ret;
+
+	return 0;
+}
+
