@@ -163,6 +163,8 @@ struct isobusfs_priv {
 	struct sock_extended_err *serr;
 	struct scm_timestamping *tss;
 	struct isobusfs_stats stats;
+
+	uint8_t tan;
 };
 
 struct isobusfs_msg {
