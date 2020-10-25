@@ -123,7 +123,6 @@ static int isobusfs_client_parse_args(struct isobusfs_priv *priv,
 		priv->prio = strtoul(optarg, NULL, 0);
 		break;
 	case 'P':
-		priv->polltimeout = strtoul(optarg, NULL, 0);
 		break;
 	case 'c':
 		priv->todo_connect = 1;
