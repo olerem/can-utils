@@ -479,7 +479,8 @@ static int isobusfsd_recv(struct isobusfs_priv *priv)
 		else if (ret < 0)
 			return -errno;
 		else if (!ret)
-			return -ETIME;
+			continue;
+			//return -ETIME;
 
 		if (!(fds.revents & events)) {
 			warn("%s: something else is wrong", __func__);
