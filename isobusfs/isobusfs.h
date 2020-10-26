@@ -165,6 +165,7 @@ struct isobusfs_priv {
 	struct isobusfs_stats stats;
 
 	uint8_t tan;
+	bool server;
 };
 
 struct isobusfs_msg {
@@ -179,6 +180,7 @@ void isobusfs_init_sockaddr_can(struct sockaddr_can *sac, uint32_t pgn);
 int isobusfs_ser_rx_buf(struct isobusfs_priv *priv, struct isobusfs_msg *msg);
 int isobusfs_cl_rx_buf(struct isobusfs_priv *priv, struct isobusfs_msg *msg);
 int isobusfs_cl_property_req(struct isobusfs_priv *priv);
+int isobusfs_recv(struct isobusfs_priv *priv);
 
 /*
  * min()/max()/clamp() macros that also do
