@@ -379,7 +379,10 @@ static int isobusfs_cl_recv_one(struct isobusfs_priv *priv,
 	/* TODO: handle transfer more then allowed */
 
 	warn("%s:%i", __func__, __LINE__);
-	ret = isobusfs_cl_rx_buf(priv, msg);
+	if (priv->server)
+		ret = isobusfs_ser_rx_buf(priv, msg);
+	else
+		ret = isobusfs_cl_rx_buf(priv, msg);
 	if (ret < 0) {
 		warn("process buffer");
 		return EXIT_FAILURE;
@@ -388,7 +391,7 @@ static int isobusfs_cl_recv_one(struct isobusfs_priv *priv,
 	return EXIT_SUCCESS;
 }
 
-static int isobusfs_cl_recv(struct isobusfs_priv *priv)
+int isobusfs_recv(struct isobusfs_priv *priv)
 {
 	struct isobusfs_stats *stats = &priv->stats;
 	unsigned int events = POLLIN | POLLERR;
@@ -810,7 +813,7 @@ int isobusfs_cl_property_req(struct isobusfs_priv *priv)
 	if (ret < 0)
 		return ret;
 
-	ret = isobusfs_cl_recv(priv);
+	ret = isobusfs_recv(priv);
 	if (ret < 0)
 		return ret;
 
@@ -835,7 +838,7 @@ int isobusfs_cl_get_cur_dir_req(struct isobusfs_priv *priv)
 	if (ret < 0)
 		return ret;
 
-	ret = isobusfs_cl_recv(priv);
+	ret = isobusfs_recv(priv);
 	if (ret < 0)
 		return ret;
 
