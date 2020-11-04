@@ -352,7 +352,7 @@ static int isobusfs_send(struct isobusfs_priv *priv, uint8_t *buf,
 	return 0;
 }
 
-static int isobusfs_cl_recv_one(struct isobusfs_priv *priv,
+static int isobusfs_recv_one(struct isobusfs_priv *priv,
 			      struct isobusfs_msg *msg)
 {
 	int ret;
@@ -436,7 +436,7 @@ int isobusfs_recv(struct isobusfs_priv *priv)
 
 		if (fds.revents & POLLIN) {
 			/* ignore errors? */
-			isobusfs_cl_recv_one(priv, msg);
+			isobusfs_recv_one(priv, msg);
 		}
 
 #if 0
