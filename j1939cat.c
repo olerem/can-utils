@@ -67,6 +67,7 @@ struct j1939cat_priv {
 	struct sock_extended_err *serr;
 	struct scm_timestamping *tss;
 	struct j1939cat_stats stats;
+	int32_t last_dpo;
 };
 
 static const char help_msg[] =
@@ -152,13 +153,13 @@ static const char *j1939cat_tstype_to_str(int tstype)
 {
 	switch (tstype) {
 	case SCM_TSTAMP_SCHED:
-		return "  ENQ";
+		return "TX ENQ";
 	case SCM_TSTAMP_SND:
-		return "  SND";
+		return "TX SND";
 	case SCM_TSTAMP_ACK:
-		return "  ACK";
+		return "TX ACK";
 	default:
-		return "  unk";
+		return "   unk";
 	}
 }
 
@@ -231,14 +232,35 @@ static int j1939cat_extract_serr(struct j1939cat_priv *priv)
 		 *     error reason is converted from J1939
 		 *     abort to linux error name space.
 		 */
-		if (serr->ee_info != J1939_EE_INFO_TX_ABORT)
-			warnx("serr: unknown ee_info: %i",
-			      serr->ee_info);
+		switch (serr->ee_info) {
+		case J1939_EE_INFO_TX_ABORT:
+			j1939cat_print_timestamp(priv, "TX ABT", &tss->ts[0]);
+			warnx("serr: tx error: %i, %s", serr->ee_errno,
+			      strerror(serr->ee_errno));
+			return serr->ee_errno;
+		case J1939_EE_INFO_RX_RTS:
+			stats->tskey = serr->ee_data;
+			j1939cat_print_timestamp(priv, "RX RTS", &tss->ts[0]);
+			priv->last_dpo = -1;
+			return 0;
+		case J1939_EE_INFO_RX_DPO:
+			stats->tskey = serr->ee_data;
+			j1939cat_print_timestamp(priv, "RX DPO", &tss->ts[0]);
+			if (stats->send <= priv->last_dpo && priv->last_dpo != -1)
+				warnx("------------- ooo, same dpo?");
+			priv->last_dpo = stats->send;
+			return 0;
+		case J1939_EE_INFO_RX_ABORT:
+			j1939cat_print_timestamp(priv, "RX ABT", &tss->ts[0]);
+			warnx("serr: rx error: %i, %s", serr->ee_errno,
+			      strerror(serr->ee_errno));
+			return serr->ee_errno;
+		default:
+			warnx("serr: unknown ee_info: %i", serr->ee_info);
+			return -ENOTSUP;
+		}
 
-		j1939cat_print_timestamp(priv, "  ABT", &tss->ts[0]);
-		warnx("serr: tx error: %i, %s", serr->ee_errno, strerror(serr->ee_errno));
-
-		return serr->ee_errno;
+		break;
 	default:
 		warnx("serr: wrong origin: %u", serr->ee_origin);
 	}
@@ -325,7 +347,7 @@ static int j1939cat_send_loop(struct j1939cat_priv *priv, int out_fd, char *buf,
 			if (!ret)
 				return -ETIME;
 			if (!(fds.revents & events)) {
-				warn("%s: something else is wrong", __func__);
+				warn("%s: something else is wrong %x %x", __func__, fds.revents, events);
 				return -EIO;
 			}
 
@@ -499,6 +521,7 @@ static int j1939cat_recv_one(struct j1939cat_priv *priv, uint8_t *buf, size_t bu
 
 static int j1939cat_recv(struct j1939cat_priv *priv)
 {
+	unsigned int events = POLLIN | POLLERR;
 	int ret = EXIT_SUCCESS;
 	size_t buf_size;
 	uint8_t *buf;
@@ -510,10 +533,46 @@ static int j1939cat_recv(struct j1939cat_priv *priv)
 		return EXIT_FAILURE;;
 	}
 
+	priv->last_dpo = -1;
+
 	while (priv->todo_recv) {
-		ret = j1939cat_recv_one(priv, buf, buf_size);
-		if (ret)
-			break;
+		if (priv->polltimeout) {
+			struct pollfd fds = {
+				.fd = priv->sock,
+				.events = events,
+			};
+			int ret;
+
+			ret = poll(&fds, 1, priv->polltimeout);
+			if (ret == -EINTR)
+				continue;
+			if (ret < 0)
+				return -errno;
+			if (!ret)
+				continue;
+			if (!(fds.revents & events)) {
+				warn("%s: something else is wrong %x %x", __func__, fds.revents, events);
+				return -EIO;
+			}
+
+			if (fds.revents & POLLERR) {
+				ret = j1939cat_recv_err(priv);
+				if (ret == -EINTR)
+					continue;
+				if (ret)
+					return ret;
+			}
+
+			if (fds.revents & POLLIN) {
+				ret = j1939cat_recv_one(priv, buf, buf_size);
+				if (ret < 0)
+					break;
+			}
+		} else {
+			ret = j1939cat_recv_one(priv, buf, buf_size);
+			if (ret)
+				break;
+		}
 	}
 
 	free(buf);
