@@ -107,6 +107,7 @@ int isobusfs_srv_fss_send(struct isobusfs_srv_priv *priv)
 	/* send periodic file servers status messages. */
 	ret = send(priv->sock_fss, &priv->st, sizeof(priv->st), MSG_DONTWAIT);
 	if (ret < 0) {
+		ret = -errno;
 		pr_warn("Failed to send FS status message, error code: %d (%s)",
 			ret, strerror(ret));
 		return ret;
